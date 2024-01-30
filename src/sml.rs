@@ -21,53 +21,47 @@ pub enum Error {
     TooManyRoots,
 }
 
-pub(crate) struct Decoder {
-    cxt: Vec<Element>,
-}
+pub fn parse_rows<'a>(rows: Vec<Vec<Option<String>>>) -> Result<Element, (usize, Error)> {
+    let mut cxt: Vec<Element> = vec![];
+    let mut result = None;
+    for (line_no, mut row) in rows.into_iter().enumerate() {
+        if result.is_none() {
+            if row.len() == 1 {
+                // Singleton rows start and end elements
+                if row[0].iter().all(|x| x.eq_ignore_ascii_case("end")) {
+                    // "end" and null are always element terminators
 
-impl Decoder {
-    pub(crate) fn new() -> Self {
-        Self { cxt: vec![] }
-    }
+                    // Current element ended, pop it off the context if it exists
+                    let elt = cxt.pop().ok_or((line_no, Error::BadRoot))?;
 
-    pub(crate) fn add_row(
-        &mut self,
-        mut row: Vec<Option<String>>,
-    ) -> Result<Option<Element>, Error> {
-        if row.len() == 1 {
-            // Singleton rows start and end elements
-            if row[0].iter().all(|x| x.eq_ignore_ascii_case("end")) {
-                // "end" and null are always element terminators
-
-                // Current element ended, pop it off the context if it exists
-                let elt = self.cxt.pop().ok_or(Error::BadRoot)?;
-
-                // If the context is empty, the root element is complete
-                if self.cxt.is_empty() {
-                    return Ok(Some(elt));
+                    // If the context is empty, the root element is complete
+                    if cxt.is_empty() {
+                        result = Some(elt);
+                    } else {
+                        // Context isn't empty, add this finished element to current element
+                        cxt.last_mut()
+                            .ok_or((line_no, Error::ExtraEnd))?
+                            .children
+                            .push(Node::Elt(elt));
+                    }
+                } else {
+                    let title = row.remove(0).ok_or((line_no, Error::NullTitle))?;
+                    cxt.push(Element {
+                        title,
+                        children: vec![],
+                    });
                 }
-
-                // Context isn't empty, add this finished element to current element
-                self.cxt
-                    .last_mut()
-                    .ok_or(Error::ExtraEnd)?
+            } else if row.len() > 1 {
+                // Larger rows define attributes of the current element
+                let key = row.remove(0).ok_or((line_no, Error::NullAttribute))?;
+                cxt.last_mut()
+                    .ok_or((line_no, Error::BadRoot))?
                     .children
-                    .push(Node::Elt(elt));
-            } else {
-                let title = row.remove(0).ok_or(Error::NullTitle)?;
-                self.cxt.push(Element {
-                    title,
-                    children: vec![],
-                });
+                    .push(Node::Attr(key, row))
             }
-        } else if row.len() > 1 {
-            // Larger rows define attributes of the current element
-            let key = row.remove(0).ok_or(Error::NullAttribute)?;
-            match self.cxt.last_mut() {
-                None => return Err(Error::BadRoot),
-                Some(elt) => elt.children.push(Node::Attr(key, row)),
-            }
+        } else if !row.is_empty() {
+            return Err((line_no, Error::TooManyRoots));
         }
-        Ok(None)
     }
+    result.ok_or((0, Error::MissingEnd))
 }

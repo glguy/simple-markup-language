@@ -1,4 +1,3 @@
-use sml::Decoder;
 pub use sml::Element;
 
 pub mod reliabletext;
@@ -14,26 +13,15 @@ pub enum Error {
 
 pub fn parse_bytes(bytes: &[u8]) -> Result<Element, Error> {
     let txt = reliabletext::decode(bytes).map_err(Error::ReliableTextError)?;
-    parse_lines(reliabletext::Lines::new(&txt))
+    parse_lines(reliabletext::lines(&txt))
 }
 
 pub fn parse_lines<'a>(lines: impl Iterator<Item = &'a str>) -> Result<Element, Error> {
-    let mut decoder = Decoder::new();
-    let mut result = None;
-    for (line_no, line) in lines.enumerate() {
-        let row = wsv::parse_row(&line).map_err(|e| Error::WsvError(line_no, e))?;
-        if result.is_none() {
-            result = decoder
-                .add_row(row)
-                .map_err(|e| Error::SmlError(line_no, e))?;
-        } else if !row.is_empty() {
-            return Err(Error::SmlError(line_no, sml::Error::TooManyRoots));
-        }
-    }
-    match result {
-        None => Err(Error::SmlError(0, sml::Error::MissingEnd)),
-        Some(elt) => Ok(elt),
-    }
+    let rows = lines
+        .enumerate()
+        .map(|(line_no, line)| wsv::parse_row(line).map_err(|e| Error::WsvError(line_no, e)))
+        .collect::<Result<Vec<Vec<Option<String>>>, Error>>()?;
+    sml::parse_rows(rows).map_err(|(line_no, err)| Error::SmlError(line_no, err))
 }
 
 #[cfg(test)]
